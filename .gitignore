@@ -1,0 +1,19 @@
+# Model files (too large for GitHub)
+model/car_damage_model.h5
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Uploaded images
+static/uploads/*
+!static/uploads/.gitkeep
+
+# Virtual environment
+venv/
+env/
+
+# OS files
+.DS_Store
+Thumbs.db

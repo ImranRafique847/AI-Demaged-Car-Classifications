@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Car Damage Detection</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #0f0f1a;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            color: #fff;
+        }
+
+        .container { max-width: 600px; width: 100%; }
+
+        h1 {
+            text-align: center;
+            font-size: 1.8rem;
+            margin-bottom: 8px;
+            color: #fff;
+        }
+        .subtitle {
+            text-align: center;
+            color: #888;
+            margin-bottom: 30px;
+            font-size: 0.95rem;
+        }
+
+        /* Upload area */
+        .upload-box {
+            background: #1a1a2e;
+            border: 2px dashed #444;
+            border-radius: 16px;
+            padding: 40px 20px;
+            text-align: center;
+            cursor: pointer;
+            position: relative;
+            transition: border-color 0.3s;
+            margin-bottom: 15px;
+        }
+        .upload-box:hover { border-color: #7b2ff7; }
+        .upload-box input {
+            position: absolute;
+            inset: 0;
+            opacity: 0;
+            cursor: pointer;
+            width: 100%;
+            height: 100%;
+        }
+        .upload-box .icon { font-size: 2.5rem; margin-bottom: 10px; }
+        .upload-box p { color: #aaa; font-size: 0.9rem; }
+
+        /* Preview */
+        #preview-img {
+            display: none;
+            max-width: 100%;
+            max-height: 280px;
+            border-radius: 12px;
+            margin: 0 auto 15px;
+            display: none;
+        }
+
+        /* Button */
+        .btn {
+            width: 100%;
+            padding: 14px;
+            background: linear-gradient(90deg, #7b2ff7, #00d2ff);
+            color: #fff;
+            border: none;
+            border-radius: 50px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: opacity 0.3s;
+        }
+        .btn:hover { opacity: 0.9; }
+        .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+        /* Loading */
+        #loading {
+            display: none;
+            text-align: center;
+            padding: 20px;
+            color: #aaa;
+        }
+        .spinner {
+            width: 40px; height: 40px;
+            border: 3px solid #333;
+            border-top-color: #7b2ff7;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin: 0 auto 10px;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* ── RESULT — clean & simple ── */
+        #result {
+            display: none;
+            margin-top: 25px;
+            background: #1a1a2e;
+            border-radius: 16px;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .damage-label {
+            font-size: 2.2rem;
+            font-weight: 700;
+            margin-bottom: 6px;
+        }
+        .damage-confidence {
+            font-size: 1rem;
+            color: #aaa;
+            margin-bottom: 20px;
+        }
+
+        .damage-bar-wrap {
+            background: #2a2a3e;
+            border-radius: 50px;
+            height: 14px;
+            overflow: hidden;
+            margin-bottom: 25px;
+        }
+        .damage-bar {
+            height: 100%;
+            border-radius: 50px;
+            transition: width 1s ease;
+        }
+
+        .damage-desc {
+            font-size: 1rem;
+            color: #ccc;
+            background: #12122a;
+            border-radius: 10px;
+            padding: 14px 20px;
+            line-height: 1.6;
+        }
+
+        .try-again {
+            margin-top: 20px;
+            background: transparent;
+            border: 1px solid #444;
+            color: #aaa;
+            padding: 10px 25px;
+            border-radius: 50px;
+            cursor: pointer;
+            font-size: 0.85rem;
+            transition: all 0.3s;
+        }
+        .try-again:hover { border-color: #7b2ff7; color: #fff; }
+
+        .error-msg {
+            background: rgba(220,53,69,0.15);
+            border: 1px solid rgba(220,53,69,0.4);
+            color: #fc8181;
+            padding: 12px 18px;
+            border-radius: 10px;
+            margin-top: 12px;
+            display: none;
+            font-size: 0.9rem;
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>🚗 Car Damage Detection</h1>
+    <p class="subtitle">Upload a car photo to detect damage severity</p>
+
+    <!-- Upload -->
+    <div class="upload-box" id="upload-box">
+        <input type="file" id="file-input" accept=".jpg,.jpeg,.png,.webp">
+        <div class="icon">📷</div>
+        <p>Click or drop a car image here</p>
+    </div>
+
+    <!-- Preview -->
+    <img id="preview-img" src="" alt="Preview">
+
+    <div class="error-msg" id="error-msg"></div>
+
+    <button class="btn" id="analyze-btn" onclick="analyze()" disabled>
+        Analyze Damage
+    </button>
+
+    <!-- Loading -->
+    <div id="loading">
+        <div class="spinner"></div>
+        <p>Analyzing...</p>
+    </div>
+
+    <!-- Result -->
+    <div id="result">
+        <div class="damage-label" id="result-label"></div>
+        <div class="damage-confidence" id="result-conf"></div>
+        <div class="damage-bar-wrap">
+            <div class="damage-bar" id="result-bar"></div>
+        </div>
+        <div class="damage-desc" id="result-desc"></div>
+        <button class="try-again" onclick="reset()">🔄 Try Another Image</button>
+    </div>
+</div>
+
+<script>
+    const DESCRIPTIONS = {
+        '04-whole':    'The car appears to be in good condition with no visible damage detected.',
+        '01-minor':    'Minor damage detected — small scratches, dents, or paint chips. Repair cost is typically low.',
+        '02-moderate': 'Moderate damage detected — visible dents, broken parts, or panel damage. Repair recommended.',
+        '03-severe':   'Severe damage detected — major structural damage. The car may not be safe to drive.'
+    };
+
+    let selectedFile = null;
+
+    document.getElementById('file-input').addEventListener('change', e => {
+        handleFile(e.target.files[0]);
+    });
+
+    const uploadBox = document.getElementById('upload-box');
+    uploadBox.addEventListener('dragover',  e => { e.preventDefault(); uploadBox.style.borderColor='#7b2ff7'; });
+    uploadBox.addEventListener('dragleave', () => uploadBox.style.borderColor='#444');
+    uploadBox.addEventListener('drop', e => {
+        e.preventDefault();
+        uploadBox.style.borderColor = '#444';
+        handleFile(e.dataTransfer.files[0]);
+    });
+
+    function handleFile(file) {
+        if (!file) return;
+        selectedFile = file;
+        hideError();
+        document.getElementById('result').style.display = 'none';
+
+        const reader = new FileReader();
+        reader.onload = e => {
+            const img = document.getElementById('preview-img');
+            img.src = e.target.result;
+            img.style.display = 'block';
+            document.getElementById('analyze-btn').disabled = false;
+        };
+        reader.readAsDataURL(file);
+    }
+
+    async function analyze() {
+        if (!selectedFile) return;
+
+        document.getElementById('loading').style.display = 'block';
+        document.getElementById('result').style.display  = 'none';
+        document.getElementById('analyze-btn').disabled  = true;
+        hideError();
+
+        const formData = new FormData();
+        formData.append('file', selectedFile);
+
+        try {
+            const res  = await fetch('/predict', { method: 'POST', body: formData });
+            const data = await res.json();
+            if (data.error) { showError(data.error); return; }
+            showResult(data);
+        } catch(e) {
+            showError('Something went wrong. Please try again.');
+        } finally {
+            document.getElementById('loading').style.display = 'none';
+            document.getElementById('analyze-btn').disabled  = false;
+        }
+    }
+
+    function showResult(data) {
+        document.getElementById('result-label').textContent = data.label;
+        document.getElementById('result-label').style.color = data.color;
+        document.getElementById('result-conf').textContent  = `Confidence: ${data.confidence}%`;
+        document.getElementById('result-bar').style.width   = data.confidence + '%';
+        document.getElementById('result-bar').style.background = data.color;
+        document.getElementById('result-desc').textContent  = DESCRIPTIONS[data.predicted_class] || '';
+        document.getElementById('result').style.display     = 'block';
+        document.getElementById('result').scrollIntoView({ behavior: 'smooth' });
+    }
+
+    function reset() {
+        selectedFile = null;
+        document.getElementById('file-input').value = '';
+        document.getElementById('preview-img').style.display = 'none';
+        document.getElementById('result').style.display = 'none';
+        document.getElementById('analyze-btn').disabled = true;
+        hideError();
+    }
+
+    function showError(msg) {
+        const el = document.getElementById('error-msg');
+        el.textContent = '⚠️ ' + msg;
+        el.style.display = 'block';
+    }
+    function hideError() {
+        document.getElementById('error-msg').style.display = 'none';
+    }
+</script>
+</body>
+</html>
