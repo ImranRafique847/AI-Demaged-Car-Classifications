@@ -1,8 +1,15 @@
-tensorflow==2.13.0
-flask==3.0.0
-numpy==1.24.3
-pillow==10.0.0
+# ── Production requirements (CPU only — for AWS deployment) ──
+# Use tensorflow-cpu instead of tensorflow to reduce size by ~120MB
+tensorflow-cpu==2.15.0
+flask==3.1.3
+numpy==1.26.4
+pillow==12.2.0
 scikit-learn==1.3.0
-matplotlib==3.7.2
-seaborn==0.12.2
-werkzeug==3.0.1
+matplotlib==3.10.9
+seaborn==0.13.2
+werkzeug==3.1.8
+gunicorn==21.2.0
+
+# ── Local development (GPU) ──
+# If training locally with GPU, install separately:
+# pip install tensorflow==2.15.0
