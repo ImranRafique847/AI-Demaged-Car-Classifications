@@ -192,7 +192,7 @@
     <!-- Loading -->
     <div id="loading">
         <div class="spinner"></div>
-        <p>Analyzing...</p>
+        <p>Analyzing... (first request may take ~30s)</p>
     </div>
 
     <!-- Result -->
@@ -246,6 +246,9 @@
         reader.readAsDataURL(file);
     }
 
+    // Works both locally (Flask) and on AWS Lambda (API Gateway)
+    const API_URL = window.location.origin + '/predict';
+
     async function analyze() {
         if (!selectedFile) return;
 
@@ -254,11 +257,20 @@
         document.getElementById('analyze-btn').disabled  = true;
         hideError();
 
-        const formData = new FormData();
-        formData.append('file', selectedFile);
-
         try {
-            const res  = await fetch('/predict', { method: 'POST', body: formData });
+            // Read file as base64 and send as JSON — avoids multipart binary issues on Lambda
+            const base64 = await new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload  = e => resolve(e.target.result.split(',')[1]);
+                reader.onerror = reject;
+                reader.readAsDataURL(selectedFile);
+            });
+
+            const res  = await fetch(API_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ image: base64, filename: selectedFile.name })
+            });
             const data = await res.json();
             if (data.error) { showError(data.error); return; }
             showResult(data);
@@ -271,12 +283,17 @@
     }
 
     function showResult(data) {
-        document.getElementById('result-label').textContent = data.label;
-        document.getElementById('result-label').style.color = data.color;
-        document.getElementById('result-conf').textContent  = `Confidence: ${data.confidence}%`;
-        document.getElementById('result-bar').style.width   = data.confidence + '%';
-        document.getElementById('result-bar').style.background = data.color;
-        document.getElementById('result-desc').textContent  = DESCRIPTIONS[data.predicted_class] || '';
+        const label      = data.label || data.predicted_class || 'Unknown';
+        const confidence = data.confidence !== undefined ? data.confidence : 0;
+        const color      = data.color || '#7b2ff7';
+        const predClass  = data.predicted_class || '';
+
+        document.getElementById('result-label').textContent = label;
+        document.getElementById('result-label').style.color = color;
+        document.getElementById('result-conf').textContent  = `Confidence: ${confidence}%`;
+        document.getElementById('result-bar').style.width   = confidence + '%';
+        document.getElementById('result-bar').style.background = color;
+        document.getElementById('result-desc').textContent  = DESCRIPTIONS[predClass] || '';
         document.getElementById('result').style.display     = 'block';
         document.getElementById('result').scrollIntoView({ behavior: 'smooth' });
     }

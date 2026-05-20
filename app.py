@@ -102,20 +102,38 @@ def index():
 
 @app.route('/predict', methods=['POST'])
 def predict():
+    # Accept JSON base64 payload (used by frontend on both local and Lambda)
+    if request.is_json:
+        data = request.get_json()
+        b64_image = data.get('image')
+        if not b64_image:
+            return jsonify({'error': 'Missing image field'}), 400
+        import base64
+        from io import BytesIO
+        image_bytes = base64.b64decode(b64_image)
+        # Save to temp file for predict_image
+        import tempfile
+        suffix = '.' + (data.get('filename', 'img.jpg').rsplit('.', 1)[-1] or 'jpg')
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp.write(image_bytes)
+            tmp_path = tmp.name
+        try:
+            result = predict_image(tmp_path)
+        finally:
+            os.unlink(tmp_path)
+        return jsonify(result)
+
+    # Legacy multipart fallback (direct curl / Postman testing)
     if 'file' not in request.files:
         return jsonify({'error': 'No file uploaded'}), 400
-
     file = request.files['file']
     if file.filename == '':
         return jsonify({'error': 'No file selected'}), 400
-
     if not allowed_file(file.filename):
         return jsonify({'error': 'Invalid file type. Use JPG, PNG, or WEBP'}), 400
-
     filename  = secure_filename(file.filename)
     save_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
     file.save(save_path)
-
     result = predict_image(save_path)
     return jsonify(result)
 

@@ -49,6 +49,12 @@ docker tag car-damage-detection:latest 123456789.dkr.ecr.us-east-1.amazonaws.com
 docker push 123456789.dkr.ecr.us-east-1.amazonaws.com/car-damage-detection:latest
 ```
 
+Alternatively, use the provided PowerShell deployment script from the repository root:
+
+```powershell
+.\deploy_to_ecr_and_lambda.ps1 -Region us-east-1 -RepoName car-damage-detection -LambdaFunctionName car-damage-detection -RoleArn arn:aws:iam::123456789:role/lambda-execution-role
+```
+
 ---
 
 ## Step 4 — Create Lambda Function

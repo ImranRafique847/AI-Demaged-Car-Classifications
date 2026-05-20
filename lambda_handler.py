@@ -1,40 +1,27 @@
 """
-AWS Lambda Handler
-==================
-Wraps the Flask app using Mangum (ASGI/WSGI adapter for Lambda)
-This allows the Flask app to run on AWS Lambda + API Gateway
+AWS Lambda Handler for Car Damage Detection
+============================================
+Accepts POST /predict with JSON body: {"image": "<base64>", "filename": "x.jpg"}
+Model loaded lazily on first request to avoid Lambda init timeout.
 """
 
 import os
 import json
 import base64
 import numpy as np
+from io import BytesIO
 
-# Set TF to use minimal memory on Lambda
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 
-import tensorflow as tf
-from tensorflow.keras.models import load_model
-from tensorflow.keras.preprocessing.image import load_img, img_to_array
-from PIL import Image
-from io import BytesIO
-import tempfile
+BASE_DIR        = os.path.dirname(os.path.abspath(__file__))
+MODEL_PATH      = os.path.join(BASE_DIR, 'model', 'car_damage_model.h5')
+CLASS_INFO_PATH = os.path.join(BASE_DIR, 'model', 'class_info.json')
+HTML_PATH       = os.path.join(BASE_DIR, 'templates', 'index.html')
 
-# ── Load model once (Lambda reuses container between calls) ──
-MODEL_PATH     = os.path.join(os.path.dirname(__file__), 'model', 'car_damage_model.h5')
-CLASS_INFO_PATH= os.path.join(os.path.dirname(__file__), 'model', 'class_info.json')
-
-print('Loading model...')
-model = load_model(MODEL_PATH)
-
-with open(CLASS_INFO_PATH) as f:
-    class_info = json.load(f)
-
-CLASS_INDICES = class_info['class_indices']
-CLASS_LABELS  = class_info['class_labels']
-IDX_TO_CLASS  = {str(v): k for k, v in CLASS_INDICES.items()}
-IMG_SIZE      = tuple(class_info['img_size'])
+_model       = None
+_class_info  = None
+_initialized = False
 
 DAMAGE_COLORS = {
     '04-whole':    '#28a745',
@@ -49,136 +36,129 @@ DAMAGE_ICONS = {
     '03-severe':   '🚨',
 }
 
-print('Model loaded successfully!')
+
+def _load_model():
+    global _model, _class_info, _initialized
+    if _initialized:
+        return
+    import tensorflow as tf
+    from tensorflow.keras.models import load_model
+    print('Loading model...')
+    _model = load_model(MODEL_PATH)
+    with open(CLASS_INFO_PATH) as f:
+        _class_info = json.load(f)
+    _initialized = True
+    print('Model loaded.')
 
 
-def predict_from_bytes(image_bytes):
-    """Run prediction on image bytes."""
+def predict_from_bytes(image_bytes: bytes) -> dict:
+    import tensorflow as tf
+    from PIL import Image
+
+    _load_model()
+
+    class_indices = _class_info['class_indices']
+    class_labels  = _class_info['class_labels']
+    idx_to_class  = {str(v): k for k, v in class_indices.items()}
+    img_size      = tuple(_class_info['img_size'])
+
     img = Image.open(BytesIO(image_bytes)).convert('RGB')
-    img = img.resize(IMG_SIZE)
+    img = img.resize(img_size)
     img_array = np.array(img, dtype=np.float32)
     img_array = tf.keras.applications.efficientnet.preprocess_input(img_array)
     img_array = np.expand_dims(img_array, axis=0)
 
-    preds      = model.predict(img_array, verbose=0)[0]
+    preds      = _model.predict(img_array, verbose=0)[0]
     pred_idx   = int(np.argmax(preds))
-    pred_class = IDX_TO_CLASS[str(pred_idx)]
+    pred_class = idx_to_class[str(pred_idx)]
     confidence = float(preds[pred_idx]) * 100
-
-    all_probs = [
-        {
-            'class':       k,
-            'label':       CLASS_LABELS[k],
-            'probability': round(float(preds[v]) * 100, 1),
-            'color':       DAMAGE_COLORS[k],
-        }
-        for k, v in CLASS_INDICES.items()
-    ]
-    all_probs.sort(key=lambda x: x['probability'], reverse=True)
 
     return {
         'predicted_class': pred_class,
-        'label':           CLASS_LABELS[pred_class],
+        'label':           class_labels[pred_class],
         'confidence':      round(confidence, 1),
         'color':           DAMAGE_COLORS[pred_class],
         'icon':            DAMAGE_ICONS[pred_class],
-        'all_probs':       all_probs,
     }
 
 
-def read_html():
-    """Read the HTML template."""
-    html_path = os.path.join(os.path.dirname(__file__), 'templates', 'index.html')
-    with open(html_path, 'r') as f:
+def read_html() -> str:
+    with open(HTML_PATH, 'r', encoding='utf-8') as f:
         return f.read()
 
 
-def handler(event, context):
-    """
-    AWS Lambda handler function.
-    Handles both GET (serve HTML) and POST (predict) requests.
-    """
-    http_method = event.get('httpMethod', 'GET')
-    path        = event.get('path', '/')
+def ok(body: dict):
+    return {
+        'statusCode': 200,
+        'headers': {
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': '*',
+        },
+        'body': json.dumps(body),
+    }
 
-    # ── GET / → serve the HTML page ──────────────────────────
-    if http_method == 'GET' and path == '/':
+
+def err(status: int, msg: str):
+    return {
+        'statusCode': status,
+        'headers': {
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': '*',
+        },
+        'body': json.dumps({'error': msg}),
+    }
+
+
+def handler(event, context):
+    # Normalise method + path across API GW v1 and v2
+    http_method = (event.get('httpMethod')
+                   or event.get('requestContext', {})
+                              .get('http', {}).get('method', 'GET'))
+    path = (event.get('path') or event.get('rawPath', '/'))
+
+    # ── GET / → HTML ─────────────────────────────────────────────────────────
+    if http_method == 'GET' and path in ('/', ''):
         return {
             'statusCode': 200,
-            'headers': {'Content-Type': 'text/html'},
-            'body': read_html()
+            'headers': {'Content-Type': 'text/html; charset=utf-8'},
+            'body': read_html(),
         }
 
-    # ── POST /predict → run prediction ───────────────────────
+    # ── CORS preflight ────────────────────────────────────────────────────────
+    if http_method == 'OPTIONS':
+        return {
+            'statusCode': 200,
+            'headers': {
+                'Access-Control-Allow-Origin':  '*',
+                'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
+                'Access-Control-Allow-Headers': 'Content-Type',
+            },
+            'body': '',
+        }
+
+    # ── POST /predict ─────────────────────────────────────────────────────────
     if http_method == 'POST' and path == '/predict':
         try:
-            body = event.get('body', '')
-            is_base64 = event.get('isBase64Encoded', False)
+            raw_body = event.get('body', '') or ''
 
-            # Parse multipart form data to extract image
-            if is_base64:
-                body = base64.b64decode(body)
-            elif isinstance(body, str):
-                body = body.encode()
+            # API Gateway may base64-encode the body
+            if event.get('isBase64Encoded', False):
+                raw_body = base64.b64decode(raw_body).decode('utf-8')
 
-            # Extract image bytes from multipart body
-            content_type = event.get('headers', {}).get(
-                'content-type', event.get('headers', {}).get('Content-Type', ''))
+            payload = json.loads(raw_body)
+            b64_image = payload.get('image')
+            if not b64_image:
+                return err(400, 'Missing "image" field in JSON body')
 
-            boundary = None
-            for part in content_type.split(';'):
-                part = part.strip()
-                if part.startswith('boundary='):
-                    boundary = part[9:].strip()
-                    break
-
-            if not boundary:
-                return {
-                    'statusCode': 400,
-                    'headers': {'Content-Type': 'application/json'},
-                    'body': json.dumps({'error': 'Invalid request format'})
-                }
-
-            # Parse multipart to get image bytes
-            boundary_bytes = ('--' + boundary).encode()
-            parts = body.split(boundary_bytes)
-            image_bytes = None
-
-            for part in parts:
-                if b'filename=' in part and b'Content-Type: image' in part:
-                    # Split headers from body
-                    header_end = part.find(b'\r\n\r\n')
-                    if header_end != -1:
-                        image_bytes = part[header_end + 4:].rstrip(b'\r\n--')
-                        break
-
-            if not image_bytes:
-                return {
-                    'statusCode': 400,
-                    'headers': {'Content-Type': 'application/json'},
-                    'body': json.dumps({'error': 'No image found in request'})
-                }
-
+            # Decode base64 → raw image bytes
+            image_bytes = base64.b64decode(b64_image)
             result = predict_from_bytes(image_bytes)
-            return {
-                'statusCode': 200,
-                'headers': {
-                    'Content-Type': 'application/json',
-                    'Access-Control-Allow-Origin': '*'
-                },
-                'body': json.dumps(result)
-            }
+            return ok(result)
 
+        except json.JSONDecodeError:
+            return err(400, 'Invalid JSON body')
         except Exception as e:
-            return {
-                'statusCode': 500,
-                'headers': {'Content-Type': 'application/json'},
-                'body': json.dumps({'error': str(e)})
-            }
+            print(f'Prediction error: {e}')
+            return err(500, str(e))
 
-    # ── 404 for unknown routes ────────────────────────────────
-    return {
-        'statusCode': 404,
-        'headers': {'Content-Type': 'application/json'},
-        'body': json.dumps({'error': 'Not found'})
-    }
+    return err(404, 'Not found')
