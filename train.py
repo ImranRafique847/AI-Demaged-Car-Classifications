@@ -1,13 +1,8 @@
 """
 AI Car Damage Detection System - Training Script
 ================================================
-Improvements over previous version:
-  - EfficientNetB4 (larger, more accurate than B3)
-  - Stronger augmentation (channel shift, more rotation/zoom)
-  - Label smoothing (handles blurry minor/moderate boundaries)
-  - Unfreeze top 100 layers in fine-tuning (was 60)
-  - More epochs with cosine LR decay
-  - Test-Time Augmentation (TTA) for better predictions
+EfficientNetB0 — best for small datasets (1600 images)
+Smaller model = less overfitting = better accuracy
 Run: python train.py
 """
 
@@ -21,15 +16,14 @@ warnings.filterwarnings('ignore')
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
 import tensorflow as tf
-from tensorflow.keras.applications import EfficientNetB4
+from tensorflow.keras.applications import EfficientNetB0
 from tensorflow.keras.models import Model, load_model
 from tensorflow.keras.layers import (Dense, GlobalAveragePooling2D,
                                      Dropout, BatchNormalization)
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
 from tensorflow.keras.callbacks import (EarlyStopping, ModelCheckpoint,
-                                        ReduceLROnPlateau, LearningRateScheduler)
+                                        ReduceLROnPlateau)
 from tensorflow.keras.optimizers import Adam
-from tensorflow.keras.losses import CategoricalCrossentropy
 from sklearn.metrics import classification_report, confusion_matrix
 from sklearn.utils.class_weight import compute_class_weight
 
@@ -42,13 +36,11 @@ MODEL_PATH = os.path.join(MODEL_DIR, 'car_damage_model.h5')
 
 os.makedirs(MODEL_DIR, exist_ok=True)
 
-IMG_SIZE    = (380, 380)   # EfficientNetB4 optimal size
-BATCH_SIZE  = 16
-EPOCHS_P1   = 35           # Phase 1 — head only
-EPOCHS_P2   = 25           # Phase 2 — fine-tune
-LR          = 1e-3
+IMG_SIZE    = (224, 224)   # EfficientNetB0 optimal
+BATCH_SIZE  = 32
+EPOCHS_P1   = 40
+EPOCHS_P2   = 30
 NUM_CLASSES = 4
-TTA_STEPS   = 10           # Test-time augmentation passes
 
 CLASS_NAMES = ['01-minor', '02-moderate', '03-severe', '04-whole']
 CLASS_LABELS = {
@@ -59,7 +51,6 @@ CLASS_LABELS = {
 }
 
 
-# ── Step 1: Dataset Summary ────────────────────────────────────────────────
 def print_dataset_summary():
     print('\n' + '='*55)
     print('  DATASET SUMMARY')
@@ -78,28 +69,24 @@ def print_dataset_summary():
     print('='*55 + '\n')
 
 
-# ── Step 2: Data Generators (stronger augmentation) ───────────────────────
 def create_generators():
-    print('Creating data generators with strong augmentation...')
+    print('Creating data generators...')
 
     preprocess = tf.keras.applications.efficientnet.preprocess_input
 
-    # Stronger augmentation — helps model generalise with limited data
+    # Moderate augmentation — not too aggressive for small dataset
     train_datagen = ImageDataGenerator(
         preprocessing_function=preprocess,
-        rotation_range=40,           # was 25
-        width_shift_range=0.25,      # was 0.2
-        height_shift_range=0.25,     # was 0.2
-        shear_range=0.2,             # was 0.15
-        zoom_range=0.3,              # was 0.2
+        rotation_range=20,
+        width_shift_range=0.15,
+        height_shift_range=0.15,
+        shear_range=0.1,
+        zoom_range=0.15,
         horizontal_flip=True,
-        vertical_flip=False,
-        brightness_range=[0.7, 1.3], # was [0.8, 1.2]
-        channel_shift_range=30.0,    # NEW — random colour shifts
+        brightness_range=[0.85, 1.15],
         fill_mode='nearest'
     )
 
-    # Validation — no augmentation, just preprocessing
     val_datagen = ImageDataGenerator(preprocessing_function=preprocess)
 
     train_gen = train_datagen.flow_from_directory(
@@ -117,30 +104,12 @@ def create_generators():
         shuffle=False
     )
 
-    # TTA generator — augmented validation for test-time augmentation
-    tta_datagen = ImageDataGenerator(
-        preprocessing_function=preprocess,
-        rotation_range=20,
-        width_shift_range=0.1,
-        height_shift_range=0.1,
-        zoom_range=0.1,
-        horizontal_flip=True,
-    )
-    tta_gen = tta_datagen.flow_from_directory(
-        VAL_DIR,
-        target_size=IMG_SIZE,
-        batch_size=BATCH_SIZE,
-        class_mode='categorical',
-        shuffle=False
-    )
-
     print(f'  Class indices : {train_gen.class_indices}')
     print(f'  Train batches : {len(train_gen)}')
     print(f'  Val batches   : {len(val_gen)}\n')
-    return train_gen, val_gen, tta_gen
+    return train_gen, val_gen
 
 
-# ── Step 3: Class Weights ──────────────────────────────────────────────────
 def get_class_weights(train_gen):
     print('Computing class weights...')
     labels  = train_gen.classes
@@ -153,75 +122,49 @@ def get_class_weights(train_gen):
     return cw
 
 
-# ── Step 4: Build Model (EfficientNetB4) ───────────────────────────────────
 def build_model():
-    print('Building EfficientNetB4 model...')
-    print('  (Upgraded from B3 — larger receptive field, better accuracy)\n')
+    print('Building EfficientNetB0 model (best for small datasets)...')
 
-    base = EfficientNetB4(
+    base = EfficientNetB0(
         weights='imagenet',
         include_top=False,
-        input_shape=(380, 380, 3)
+        input_shape=(224, 224, 3)
     )
     base.trainable = False
 
     x   = base.output
     x   = GlobalAveragePooling2D()(x)
     x   = BatchNormalization()(x)
-    x   = Dense(512, activation='relu')(x)
-    x   = Dropout(0.5)(x)
     x   = Dense(256, activation='relu')(x)
-    x   = Dropout(0.4)(x)
+    x   = Dropout(0.5)(x)
+    x   = Dense(128, activation='relu')(x)
+    x   = Dropout(0.3)(x)
     out = Dense(NUM_CLASSES, activation='softmax')(x)
 
     model = Model(inputs=base.input, outputs=out)
-
-    # Label smoothing — reduces overconfidence, helps with ambiguous classes
     model.compile(
-        optimizer=Adam(learning_rate=LR),
-        loss=CategoricalCrossentropy(label_smoothing=0.1),
+        optimizer=Adam(learning_rate=1e-3),
+        loss='categorical_crossentropy',
         metrics=['accuracy']
     )
 
-    print(f'  Total params : {model.count_params():,}')
+    trainable = sum(1 for l in model.layers if l.trainable)
+    print(f'  Total params     : {model.count_params():,}')
+    print(f'  Trainable layers : {trainable}')
     return model, base
 
 
-# ── Step 5: Callbacks ──────────────────────────────────────────────────────
-def get_callbacks(phase=1):
-    patience = 10 if phase == 1 else 8
+def get_callbacks():
     return [
-        EarlyStopping(monitor='val_accuracy', patience=patience,
+        EarlyStopping(monitor='val_accuracy', patience=10,
                       restore_best_weights=True, verbose=1),
         ModelCheckpoint(MODEL_PATH, monitor='val_accuracy',
                         save_best_only=True, verbose=1),
-        ReduceLROnPlateau(monitor='val_loss', factor=0.3,
-                          patience=4, min_lr=1e-7, verbose=1),
+        ReduceLROnPlateau(monitor='val_loss', factor=0.5,
+                          patience=5, min_lr=1e-7, verbose=1),
     ]
 
 
-# ── Step 6: Test-Time Augmentation (TTA) ──────────────────────────────────
-def predict_with_tta(model, val_gen, tta_gen, steps):
-    """
-    Run prediction TTA_STEPS times with augmented images,
-    average the probabilities — more robust than single-pass prediction.
-    """
-    print(f'\nRunning Test-Time Augmentation ({steps} passes)...')
-
-    # Single-pass baseline
-    val_gen.reset()
-    preds = model.predict(val_gen, verbose=0)
-
-    # Add augmented passes
-    for i in range(steps - 1):
-        tta_gen.reset()
-        preds += model.predict(tta_gen, verbose=0)
-
-    preds /= steps
-    return np.argmax(preds, axis=1)
-
-
-# ── Step 7: Plot History ───────────────────────────────────────────────────
 def plot_history(h1, h2):
     acc     = h1.history['accuracy']     + h2.history['accuracy']
     val_acc = h1.history['val_accuracy'] + h2.history['val_accuracy']
@@ -230,8 +173,7 @@ def plot_history(h1, h2):
     split   = len(h1.history['accuracy'])
 
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-    fig.suptitle('Training History — EfficientNetB4 + Label Smoothing + TTA',
-                 fontsize=13, fontweight='bold')
+    fig.suptitle('Training History — EfficientNetB0', fontsize=13, fontweight='bold')
 
     for ax, tv, vv, title in [
         (axes[0], acc,  val_acc,  'Accuracy'),
@@ -253,27 +195,24 @@ def plot_history(h1, h2):
     print(f'  Training history saved → {out}')
 
 
-# ── Step 8: Evaluate ───────────────────────────────────────────────────────
-def evaluate(model, val_gen, tta_gen):
+def evaluate(model, val_gen):
     print('\nEvaluating model...')
     val_loss, val_acc = model.evaluate(val_gen, verbose=1)
-    print(f'\n  Standard Accuracy  : {val_acc*100:.2f}%')
+    print(f'\n  ✅ Validation Accuracy : {val_acc*100:.2f}%')
+    print(f'  ✅ Validation Loss     : {val_loss:.4f}')
 
-    # TTA evaluation
-    y_true   = val_gen.classes
-    y_pred   = predict_with_tta(model, val_gen, tta_gen, TTA_STEPS)
-    tta_acc  = np.mean(y_pred == y_true)
-    print(f'  TTA Accuracy ({TTA_STEPS}x) : {tta_acc*100:.2f}%')
+    val_gen.reset()
+    y_pred = np.argmax(model.predict(val_gen, verbose=1), axis=1)
+    y_true = val_gen.classes
 
     idx_to_class  = {v: k for k, v in val_gen.class_indices.items()}
     display_names = [CLASS_LABELS[idx_to_class[i]] for i in range(NUM_CLASSES)]
 
-    # Confusion matrix
     cm = confusion_matrix(y_true, y_pred)
     plt.figure(figsize=(8, 6))
     sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
                 xticklabels=display_names, yticklabels=display_names)
-    plt.title('Confusion Matrix (with TTA)', fontsize=14, fontweight='bold')
+    plt.title('Confusion Matrix', fontsize=14, fontweight='bold')
     plt.ylabel('Actual')
     plt.xlabel('Predicted')
     plt.xticks(rotation=30, ha='right')
@@ -283,17 +222,16 @@ def evaluate(model, val_gen, tta_gen):
     plt.close()
     print(f'  Confusion matrix saved → {out}')
 
-    print('\nClassification Report (with TTA):')
+    print('\nClassification Report:')
     print(classification_report(y_true, y_pred, target_names=display_names))
 
 
-# ── Step 9: Save Class Info ────────────────────────────────────────────────
 def save_class_info(train_gen):
     info = {
         'class_indices': train_gen.class_indices,
         'class_labels':  CLASS_LABELS,
         'img_size':      list(IMG_SIZE),
-        'model':         'EfficientNetB4',
+        'model':         'EfficientNetB0',
     }
     out = os.path.join(MODEL_DIR, 'class_info.json')
     with open(out, 'w') as f:
@@ -301,45 +239,41 @@ def save_class_info(train_gen):
     print(f'  Class info saved → {out}')
 
 
-# ── Main ───────────────────────────────────────────────────────────────────
 def main():
-    print('\n' + '='*60)
-    print('  AI CAR DAMAGE DETECTION — IMPROVED TRAINING')
-    print('  Model      : EfficientNetB4 (upgraded from B3)')
-    print('  Loss       : Categorical Crossentropy + Label Smoothing 0.1')
-    print('  Augment    : Strong (rotation 40°, channel shift, zoom 30%)')
-    print('  Evaluation : Test-Time Augmentation (TTA x10)')
-    print(f'  TensorFlow : {tf.__version__}')
-    print(f'  GPU        : {len(tf.config.list_physical_devices("GPU")) > 0}')
-    print('='*60)
+    print('\n' + '='*55)
+    print('  AI CAR DAMAGE DETECTION')
+    print('  Model: EfficientNetB0 (small, fast, less overfitting)')
+    print(f'  TensorFlow: {tf.__version__}')
+    print(f'  GPU: {len(tf.config.list_physical_devices("GPU")) > 0}')
+    print('='*55)
 
     print_dataset_summary()
-    train_gen, val_gen, tta_gen = create_generators()
+    train_gen, val_gen = create_generators()
     class_weights = get_class_weights(train_gen)
     model, base_model = build_model()
+    callbacks = get_callbacks()
 
-    # ── Phase 1: Train head only ──────────────────────────────────────────
-    print(f'\nPhase 1: Training classification head ({EPOCHS_P1} epochs max)...')
+    # Phase 1 — Train head only (base frozen)
+    print(f'\nPhase 1: Training head ({EPOCHS_P1} epochs max)...')
     h1 = model.fit(
         train_gen,
         epochs=EPOCHS_P1,
         validation_data=val_gen,
-        callbacks=get_callbacks(phase=1),
+        callbacks=callbacks,
         class_weight=class_weights,
         verbose=1
     )
-    print(f'\nPhase 1 best val accuracy: {max(h1.history["val_accuracy"])*100:.2f}%')
+    print(f'\nPhase 1 best: {max(h1.history["val_accuracy"])*100:.2f}%')
 
-    # ── Phase 2: Fine-tune top 100 layers ────────────────────────────────
-    print(f'\nPhase 2: Fine-tuning top 100 layers of EfficientNetB4...')
-    print('  (was 60 layers — more layers = better feature adaptation)\n')
+    # Phase 2 — Fine-tune top 20 layers only
+    print(f'\nPhase 2: Fine-tuning top 20 layers...')
     base_model.trainable = True
-    for layer in base_model.layers[:-100]:
+    for layer in base_model.layers[:-20]:
         layer.trainable = False
 
     model.compile(
-        optimizer=Adam(learning_rate=LR / 10),
-        loss=CategoricalCrossentropy(label_smoothing=0.1),
+        optimizer=Adam(learning_rate=1e-4),
+        loss='categorical_crossentropy',
         metrics=['accuracy']
     )
 
@@ -347,24 +281,24 @@ def main():
         train_gen,
         epochs=EPOCHS_P2,
         validation_data=val_gen,
-        callbacks=get_callbacks(phase=2),
+        callbacks=callbacks,
         class_weight=class_weights,
         verbose=1
     )
-    print(f'\nPhase 2 best val accuracy: {max(h2.history["val_accuracy"])*100:.2f}%')
+    print(f'\nPhase 2 best: {max(h2.history["val_accuracy"])*100:.2f}%')
 
     plot_history(h1, h2)
 
     best_model = load_model(MODEL_PATH)
-    evaluate(best_model, val_gen, tta_gen)
+    evaluate(best_model, val_gen)
     save_class_info(train_gen)
 
-    print('\n' + '='*60)
+    print('\n' + '='*55)
     print('  TRAINING COMPLETE!')
     print(f'  Model saved → {MODEL_PATH}')
-    print('  Now run: python app.py')
-    print('  Then open: http://localhost:5000')
-    print('='*60 + '\n')
+    print('  Run: python app.py')
+    print('  Open: http://localhost:5000')
+    print('='*55 + '\n')
 
 
 if __name__ == '__main__':

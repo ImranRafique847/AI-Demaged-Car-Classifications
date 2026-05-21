@@ -249,6 +249,26 @@
     // Works both locally (Flask) and on AWS Lambda (API Gateway)
     const API_URL = window.location.origin + '/predict';
 
+    // Compress image to max 800px and JPEG quality 0.8 before sending
+    function compressImage(file, maxSize = 800, quality = 0.8) {
+        return new Promise((resolve, reject) => {
+            const img = new Image();
+            img.onload = () => {
+                const canvas = document.createElement('canvas');
+                let w = img.width, h = img.height;
+                if (w > h && w > maxSize) { h = h * maxSize / w; w = maxSize; }
+                else if (h > maxSize) { w = w * maxSize / h; h = maxSize; }
+                canvas.width = w;
+                canvas.height = h;
+                canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+                const dataUrl = canvas.toDataURL('image/jpeg', quality);
+                resolve(dataUrl.split(',')[1]);
+            };
+            img.onerror = reject;
+            img.src = URL.createObjectURL(file);
+        });
+    }
+
     async function analyze() {
         if (!selectedFile) return;
 
@@ -258,13 +278,8 @@
         hideError();
 
         try {
-            // Read file as base64 and send as JSON — avoids multipart binary issues on Lambda
-            const base64 = await new Promise((resolve, reject) => {
-                const reader = new FileReader();
-                reader.onload  = e => resolve(e.target.result.split(',')[1]);
-                reader.onerror = reject;
-                reader.readAsDataURL(selectedFile);
-            });
+            // Compress image before sending (avoids API Gateway 6MB limit)
+            const base64 = await compressImage(selectedFile);
 
             const res  = await fetch(API_URL, {
                 method: 'POST',
