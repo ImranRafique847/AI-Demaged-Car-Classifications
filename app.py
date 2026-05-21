@@ -62,27 +62,36 @@ def allowed_file(filename):
 
 
 def predict_image(image_path):
-    """Run prediction on an image file."""
-    img       = load_img(image_path, target_size=IMG_SIZE)
-    img_array = img_to_array(img)
-    img_array = tf.keras.applications.efficientnet.preprocess_input(img_array)
-    img_array = np.expand_dims(img_array, axis=0)
+    """Run prediction on an image file with Test-Time Augmentation."""
+    IMG_SIZE = tuple(class_info.get('img_size', [300, 300]))
 
-    preds     = model.predict(img_array, verbose=0)[0]
+    # TTA — run 5 augmented passes and average
+    augment_fns = [
+        lambda img: img,                                          # original
+        lambda img: img.transpose(Image.FLIP_LEFT_RIGHT),        # flip
+        lambda img: img.rotate(10),                              # rotate +10
+        lambda img: img.rotate(-10),                             # rotate -10
+        lambda img: img.resize((int(IMG_SIZE[0]*1.1), int(IMG_SIZE[1]*1.1)),
+                               Image.LANCZOS).crop(
+                               (int(IMG_SIZE[0]*0.05), int(IMG_SIZE[1]*0.05),
+                                int(IMG_SIZE[0]*1.05), int(IMG_SIZE[1]*1.05))),  # zoom
+    ]
+
+    preds_sum = None
+    for fn in augment_fns:
+        img = load_img(image_path, target_size=IMG_SIZE)
+        img = fn(img)
+        img = img.resize(IMG_SIZE)
+        img_array = img_to_array(img)
+        img_array = tf.keras.applications.efficientnet.preprocess_input(img_array)
+        img_array = np.expand_dims(img_array, axis=0)
+        p = model.predict(img_array, verbose=0)[0]
+        preds_sum = p if preds_sum is None else preds_sum + p
+
+    preds     = preds_sum / len(augment_fns)
     pred_idx  = int(np.argmax(preds))
     pred_class= IDX_TO_CLASS[str(pred_idx)]
     confidence= float(preds[pred_idx]) * 100
-
-    all_probs = [
-        {
-            'class':      k,
-            'label':      CLASS_LABELS[k],
-            'probability': round(float(preds[v]) * 100, 1),
-            'color':      DAMAGE_COLORS[k],
-        }
-        for k, v in CLASS_INDICES.items()
-    ]
-    all_probs.sort(key=lambda x: x['probability'], reverse=True)
 
     return {
         'predicted_class': pred_class,
@@ -90,7 +99,6 @@ def predict_image(image_path):
         'confidence':      round(confidence, 1),
         'color':           DAMAGE_COLORS[pred_class],
         'icon':            DAMAGE_ICONS[pred_class],
-        'all_probs':       all_probs,
     }
 
 

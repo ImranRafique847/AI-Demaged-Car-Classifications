@@ -62,13 +62,29 @@ def predict_from_bytes(image_bytes: bytes) -> dict:
     idx_to_class  = {str(v): k for k, v in class_indices.items()}
     img_size      = tuple(_class_info['img_size'])
 
-    img = Image.open(BytesIO(image_bytes)).convert('RGB')
-    img = img.resize(img_size)
-    img_array = np.array(img, dtype=np.float32)
-    img_array = tf.keras.applications.efficientnet.preprocess_input(img_array)
-    img_array = np.expand_dims(img_array, axis=0)
+    def _preprocess(img):
+        img = img.resize(img_size)
+        arr = np.array(img, dtype=np.float32)
+        arr = tf.keras.applications.efficientnet.preprocess_input(arr)
+        return np.expand_dims(arr, axis=0)
 
-    preds      = _model.predict(img_array, verbose=0)[0]
+    base_img = Image.open(BytesIO(image_bytes)).convert('RGB')
+
+    # Test-Time Augmentation — 5 passes averaged
+    augmented = [
+        base_img,
+        base_img.transpose(Image.FLIP_LEFT_RIGHT),
+        base_img.rotate(10),
+        base_img.rotate(-10),
+        base_img.resize((int(img_size[0]*1.1), int(img_size[1]*1.1))),
+    ]
+
+    preds_sum = None
+    for img in augmented:
+        p = _model.predict(_preprocess(img), verbose=0)[0]
+        preds_sum = p if preds_sum is None else preds_sum + p
+
+    preds      = preds_sum / len(augmented)
     pred_idx   = int(np.argmax(preds))
     pred_class = idx_to_class[str(pred_idx)]
     confidence = float(preds[pred_idx]) * 100
