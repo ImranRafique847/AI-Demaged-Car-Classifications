@@ -2,18 +2,17 @@
   "class_indices": {
     "01-minor": 0,
     "02-moderate": 1,
-    "03-severe": 2,
-    "04-whole": 3
+    "03-severe": 2
   },
   "class_labels": {
     "01-minor": "Minor Damage",
     "02-moderate": "Moderate Damage",
-    "03-severe": "Severe Damage",
-    "04-whole": "No Damage (Whole)"
+    "03-severe": "Severe Damage"
   },
   "img_size": [
-    300,
-    300
+    224,
+    224
   ],
-  "model": "EfficientNetB3"
+  "model": "EfficientNet-B0 (PyTorch)",
+  "accuracy": 74.19
 }

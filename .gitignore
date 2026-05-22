@@ -1,5 +1,6 @@
 # Model files (too large for GitHub)
 model/car_damage_model.h5
+model/car_damage_model.pth
 
 # Python cache
 __pycache__/
@@ -17,3 +18,15 @@ env/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Secrets
+.env
+
+# Temp stage folders
+stage1_train/
+stage1_val/
+stage2_train/
+stage2_val/
+
+# Zip files
+*.zip
