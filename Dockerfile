@@ -21,7 +21,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Cache-bust arg — change this value to force re-copy of app files only
-ARG CACHE_BUST=4
+ARG CACHE_BUST=5
 COPY app.py .
 COPY lambda_handler.py .
 COPY templates/ templates/
